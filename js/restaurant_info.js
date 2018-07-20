@@ -1,11 +1,17 @@
 let restaurant;
 var newMap;
+let form;
 
 /**
  * Initialize map as soon as the page is loaded.
  */
 document.addEventListener('DOMContentLoaded', (event) => {
     initMap();
+    form = document.getElementById('new-review-form');
+    form.addEventListener('submit', (e) => {
+        e.preventDefault();
+        submitData();
+    })
 });
 
 /**
@@ -35,26 +41,10 @@ initMap = () => {
     });
 }
 
-/* window.initMap = () => {
-  fetchRestaurantFromURL((error, restaurant) => {
-    if (error) { // Got an error!
-      console.error(error);
-    } else {
-      self.map = new google.maps.Map(document.getElementById('map'), {
-        zoom: 16,
-        center: restaurant.latlng,
-        scrollwheel: false
-      });
-      fillBreadcrumb();
-      DBHelper.mapMarkerForRestaurant(self.restaurant, self.map);
-    }
-  });
-} */
-
 /**
  * Get current restaurant from page URL.
  */
-fetchRestaurantFromURL = (callback) => {
+fetchRestaurantFromURL = async (callback) => {
     if (self.restaurant) { // restaurant already fetched!
         callback(null, self.restaurant)
         return;
@@ -64,24 +54,66 @@ fetchRestaurantFromURL = (callback) => {
         error = 'No restaurant id in URL'
         callback(error, null);
     } else {
-        DBHelper.fetchRestaurantById(id, (error, restaurant) => {
+        DBHelper.fetchObjectById(id, 'restaurant', async (error, restaurant) => {
             self.restaurant = restaurant;
-            if (!restaurant) {
+            if (!self.restaurant) {
                 console.error(error);
                 return;
             }
-            fillRestaurantHTML();
-            callback(null, restaurant)
+            await DBHelper.fetchReviewsByRestaurantId(self.restaurant.id, (error, reviews) => {
+                if (error) {
+                    console.error(error);
+                }
+                else {
+                    self.restaurant.reviews = reviews;
+                }
+                fillRestaurantHTML();
+                callback(null, self.restaurant)
+            })
         });
     }
+}
+
+/**
+ * Clear restaurant HTML
+ */
+clearRestaurantHTML = () => {
+    const name = document.getElementById('restaurant-name');
+    const address = document.getElementById('restaurant-address');
+    const image = document.getElementById('restaurant-img');
+    const cuisine = document.getElementById('restaurant-cuisine');
+    const hours = document.getElementById('restaurant-hours');
+    const container = document.getElementById('reviews-container');
+    const list = document.getElementById('reviews-list');
+    name.innerHTML = '';
+    address.innerHTML = '';
+    image.innerHTML = '';
+    cuisine.innerHTML = '';
+    hours.innerHTML = '';
+    list.innerHTML = '';
 }
 
 /**
  * Create restaurant HTML and add it to the webpage
  */
 fillRestaurantHTML = (restaurant = self.restaurant) => {
+    clearRestaurantHTML();
     const name = document.getElementById('restaurant-name');
     name.innerHTML = restaurant.name;
+
+    const favorite = document.getElementById('restaurant-favorite');
+    let isFavorite = (restaurant.is_favorite == 'true' || restaurant.is_favorite == true) ? true : false;
+    favorite.innerHTML = (isFavorite ? 'un' : '') + 'set favorite';
+    favorite.setAttribute('aria-checked', isFavorite);
+    favorite.onclick = () => {
+        toggleFavorite(restaurant, favorite);
+        DBHelper.updateObject(restaurant, 'restaurant', (error, response) => {
+            if (error) {
+                console.error("Could not update neither local nor network database: ", error);
+                toggleFavorite(restaurant, favorite);
+            }
+        });
+    };
 
     const address = document.getElementById('restaurant-address');
     address.innerHTML = restaurant.address;
@@ -134,21 +166,19 @@ fillRestaurantHoursHTML = (operatingHours = self.restaurant.operating_hours) => 
  */
 fillReviewsHTML = (reviews = self.restaurant.reviews) => {
     const container = document.getElementById('reviews-container');
-    const title = document.createElement('h2');
-    title.innerHTML = 'Reviews';
-    container.appendChild(title);
 
     if (!reviews) {
         const noReviews = document.createElement('p');
         noReviews.innerHTML = 'No reviews yet!';
+        noReviews.classList.add('no-reviews');
         container.appendChild(noReviews);
         return;
     }
     const ul = document.getElementById('reviews-list');
+    ul.innerHTML = '';
     reviews.forEach(review => {
         ul.appendChild(createReviewHTML(review));
     });
-    container.appendChild(ul);
 }
 
 /**
@@ -163,7 +193,7 @@ createReviewHTML = (review) => {
 
     const date = document.createElement('p');
     date.classList.add('review-date');
-    date.innerHTML = review.date;
+    date.innerHTML = getFormattedDate(review.createdAt);
     li.appendChild(date);
 
     const rating = document.createElement('p');
@@ -203,3 +233,57 @@ getParameterByName = (name, url) => {
         return '';
     return decodeURIComponent(results[2].replace(/\+/g, ' '));
 }
+
+/**
+ * Parse Date string
+ */
+getFormattedDate = (date) => {
+    return (new Date(date)).toLocaleDateString('en-US', {
+        month: 'long', day: 'numeric', year: 'numeric'
+    });
+}
+
+/**
+ * Change favorite status of the restaurant
+ */
+toggleFavorite = (restaurant, button) => {
+    restaurant.is_favorite = (restaurant.is_favorite == 'true' || restaurant.is_favorite == true) ? false : true;
+    button.setAttribute('aria-checked', restaurant.is_favorite);
+    button.innerHTML = (restaurant.is_favorite ? 'un' : '') + 'set favorite';
+}
+
+/**
+ * Handle form submission
+ */
+submitData = () => {
+    const restaurant_id = self.restaurant.id;
+    const name = escapeHtml(document.getElementById('name').value);
+    const rating = parseInt(escapeHtml(document.getElementById('rating').value));
+    const comments = escapeHtml(document.getElementById('comments').value);
+    const review = {
+        restaurant_id,
+        name,
+        rating,
+        comments
+    }
+    DBHelper.addObject(review, 'review', (error, response) => {
+        if (error) {
+            console.error(error);
+        } else {
+            document.getElementById('name').value = '';
+            document.getElementById('rating').value = '';
+            document.getElementById('comments').value = '';
+            self.restaurant.reviews.push(review);
+            fillReviewsHTML();
+        }
+    })
+}
+
+function escapeHtml(unsafe) {
+    return unsafe
+         .replace(/&/g, "&amp;")
+         .replace(/</g, "&lt;")
+         .replace(/>/g, "&gt;")
+         .replace(/"/g, "&quot;")
+         .replace(/'/g, "&#039;");
+ }
